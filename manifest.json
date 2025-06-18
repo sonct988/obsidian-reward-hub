@@ -1,0 +1,10 @@
+{
+    "id": "obsidian-reward-hub",
+    "name": "Obsidian Reward Hub",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "A gamified note-taking experience with XP, levels, and special date notifications",
+    "author": "sonct",
+    "authorUrl": "https://github.com/sonct988",
+    "isDesktopOnly": false
+}

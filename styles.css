@@ -1,0 +1,46 @@
+/* Obsidian Reward Hub Styles */
+.reward-hub-modal {
+    text-align: center;
+    padding: 20px;
+}
+
+/* Debug Section Styles */
+.debug-section {
+    margin: 20px 0;
+    padding: 15px;
+    background: var(--background-secondary);
+    border-radius: 8px;
+    border-left: 4px solid #ff9500;
+}
+
+.debug-section h3 {
+    margin-top: 0;
+    color: #ff9500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.debug-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+/* Modal Button Container */
+.modal-button-container {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.modal-button-container button {
+    min-width: 80px;
+    padding: 8px 16px;
+}
+
+/* Rest of CSS... */
