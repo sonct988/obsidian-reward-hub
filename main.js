@@ -31,8 +31,14 @@ const DEFAULT_SETTINGS = {
   currentXP: 0,
   currentLevel: 1,
   showNotifications: true,
+  showWritingNotifications: false, // Mới: Tắt thông báo XP khi viết
   customLevelMessages: {},
   customLevelImages: {},
+  // Mới: Lưu lịch sử achievements
+  achievementHistory: {
+    levels: [], // Array of {level, date, message, imagePath}
+    specialDates: [] // Array of {date, year, message, imagePath, dateId}
+  },
   specialDates: [
     {
       id: "new-year",
@@ -109,6 +115,12 @@ class ObsidianRewardHubPlugin extends import_obsidian.Plugin {
         this.checkSpecialDates();
       }, 1e3);
       this.addSettingTab(new RewardHubSettingTab(this.app, this));
+      
+      // Mới: Thêm ribbon icon cho Achievement
+      this.addRibbonIcon('trophy', 'Achievement Hub', () => {
+        new AchievementModal(this.app, this).open();
+      });
+
       this.addCommand({
         id: "show-reward-info",
         name: "Show Reward Hub Information",
@@ -116,6 +128,16 @@ class ObsidianRewardHubPlugin extends import_obsidian.Plugin {
           new RewardInfoModal(this.app, this).open();
         }
       });
+      
+      // Mới: Command cho Achievement
+      this.addCommand({
+        id: "show-achievements",
+        name: "Show Achievements",
+        callback: () => {
+          new AchievementModal(this.app, this).open();
+        }
+      });
+
       this.addCommand({
         id: "add-bonus-xp",
         name: "Add Bonus XP",
@@ -149,6 +171,17 @@ class ObsidianRewardHubPlugin extends import_obsidian.Plugin {
     if (!this.settings.debugNotifications) {
       this.settings.debugNotifications = DEFAULT_SETTINGS.debugNotifications;
     }
+    // Mới: Khởi tạo achievementHistory nếu chưa có
+    if (!this.settings.achievementHistory) {
+      this.settings.achievementHistory = {
+        levels: [],
+        specialDates: []
+      };
+    }
+    // Mới: Thêm showWritingNotifications nếu chưa có
+    if (this.settings.showWritingNotifications === undefined) {
+      this.settings.showWritingNotifications = false;
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -171,12 +204,23 @@ class ObsidianRewardHubPlugin extends import_obsidian.Plugin {
       this.onLevelUp(oldLevel, this.settings.currentLevel);
     }
     this.saveSettings();
-    if (reason) {
+    // Mới: Chỉ hiển thị thông báo XP nếu được bật
+    if (reason && this.settings.showWritingNotifications) {
       new import_obsidian.Notice(`🎁 +${amount} XP: ${reason}`, 3e3);
     }
   }
   onLevelUp(oldLevel, newLevel) {
     const isRoundLevel = newLevel % 10 === 0 || newLevel % 100 === 0;
+    
+    // Mới: Lưu achievement vào lịch sử
+    const achievement = {
+      level: newLevel,
+      date: new Date().toISOString(),
+      message: this.settings.customLevelMessages[newLevel] || `🎉 Chúc mừng! Bạn đã đạt Level ${newLevel} trong Reward Hub! 🏆`,
+      imagePath: this.settings.customLevelImages[newLevel] || ""
+    };
+    this.settings.achievementHistory.levels.push(achievement);
+    
     if (isRoundLevel && this.settings.showNotifications) {
       const customMessage = this.settings.customLevelMessages[newLevel];
       const customImage = this.settings.customLevelImages[newLevel];
@@ -189,6 +233,7 @@ class ObsidianRewardHubPlugin extends import_obsidian.Plugin {
     } else {
       new import_obsidian.Notice(`🌟 Level Up! Bạn đã đạt Level ${newLevel}! 🚀`, 5e3);
     }
+    this.saveSettings(); // Lưu achievement
   }
   async onFileModify(file) {
     try {
@@ -253,6 +298,18 @@ Next Level: ${nextLevelXP - currentXP} XP needed`;
       const todayString = `${(today.getMonth() + 1).toString().padStart(2, "0")}-${today.getDate().toString().padStart(2, "0")}`;
       this.settings.specialDates.forEach((specialDate) => {
         if (specialDate.enabled && specialDate.date === todayString) {
+          // Mới: Lưu special date achievement
+          const achievement = {
+            date: specialDate.date,
+            year: today.getFullYear(),
+            message: specialDate.message,
+            imagePath: specialDate.imagePath,
+            dateId: specialDate.id,
+            achievedDate: new Date().toISOString()
+          };
+          this.settings.achievementHistory.specialDates.push(achievement);
+          this.saveSettings();
+          
           setTimeout(() => {
             new SpecialDateModal(
               this.app,
@@ -268,6 +325,139 @@ Next Level: ${nextLevelXP - currentXP} XP needed`;
   }
   showTestNotification(message, imagePath) {
     new SpecialDateModal(this.app, message, imagePath).open();
+  }
+  
+  // Mới: Helper function để resolve image path
+  resolveImagePath(imagePath) {
+    if (!imagePath || !imagePath.trim()) return "";
+    
+    // Nếu là URL (http/https)
+    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
+      return imagePath;
+    }
+    
+    // Nếu là đường dẫn local trong vault
+    if (this.app.vault.adapter.fs) {
+      // Đường dẫn tuyệt đối
+      const vaultPath = this.app.vault.adapter.basePath;
+      return `file:///${vaultPath}/${imagePath}`.replace(/\\/g, '/');
+    }
+    
+    // Fallback: coi như đường dẫn tương đối từ vault
+    return imagePath;
+  }
+}
+
+// Mới: Achievement Modal
+class AchievementModal extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("achievement-modal");
+    
+    const header = contentEl.createEl("div", { cls: "achievement-header" });
+    header.createEl("h1", { text: "🏆 Achievement Hub", cls: "achievement-title" });
+    header.createEl("p", { text: "Tất cả thành tựu đã đạt được trong Reward Hub", cls: "achievement-subtitle" });
+    
+    const tabContainer = contentEl.createDiv({ cls: "achievement-tabs" });
+    const levelTab = tabContainer.createEl("button", { text: "🏅 Levels", cls: "achievement-tab active" });
+    const dateTab = tabContainer.createEl("button", { text: "🎉 Ngày Đặc Biệt", cls: "achievement-tab" });
+    
+    const contentContainer = contentEl.createDiv({ cls: "achievement-content" });
+    
+    // Tab switching
+    levelTab.addEventListener("click", () => {
+      levelTab.addClass("active");
+      dateTab.removeClass("active");
+      this.displayLevelAchievements(contentContainer);
+    });
+    
+    dateTab.addEventListener("click", () => {
+      dateTab.addClass("active");
+      levelTab.removeClass("active");
+      this.displayDateAchievements(contentContainer);
+    });
+    
+    // Default view
+    this.displayLevelAchievements(contentContainer);
+    
+    const closeButton = contentEl.createEl("button", { text: "Đóng", cls: "mod-cta achievement-close" });
+    closeButton.addEventListener("click", () => this.close());
+  }
+  
+  displayLevelAchievements(container) {
+    container.empty();
+    const achievements = this.plugin.settings.achievementHistory.levels;
+    
+    if (achievements.length === 0) {
+      container.createEl("p", { text: "Chưa có thành tựu level nào. Hãy tiếp tục viết để đạt level cao hơn! 🚀", cls: "no-achievements" });
+      return;
+    }
+    
+    // Sắp xếp theo level giảm dần
+    const sortedAchievements = [...achievements].sort((a, b) => b.level - a.level);
+    
+    sortedAchievements.forEach(achievement => {
+      const achievementEl = container.createDiv({ cls: "achievement-item" });
+      
+      const headerEl = achievementEl.createDiv({ cls: "achievement-item-header" });
+      headerEl.createEl("h3", { text: `🏆 Level ${achievement.level}`, cls: "achievement-level" });
+      headerEl.createEl("span", { text: new Date(achievement.date).toLocaleDateString('vi-VN'), cls: "achievement-date" });
+      
+      if (achievement.imagePath && achievement.imagePath.trim()) {
+        const imgContainer = achievementEl.createDiv({ cls: "achievement-image-container" });
+        const img = imgContainer.createEl("img", { cls: "achievement-image" });
+        img.src = this.plugin.resolveImagePath(achievement.imagePath);
+        img.style.maxWidth = "200px";
+        img.style.maxHeight = "150px";
+        img.style.borderRadius = "8px";
+        img.onerror = () => { img.style.display = 'none'; };
+      }
+      
+      achievementEl.createEl("p", { text: achievement.message, cls: "achievement-message" });
+    });
+  }
+  
+  displayDateAchievements(container) {
+    container.empty();
+    const achievements = this.plugin.settings.achievementHistory.specialDates;
+    
+    if (achievements.length === 0) {
+      container.createEl("p", { text: "Chưa có thành tựu ngày đặc biệt nào. Hãy đợi đến những ngày đặc biệt! 🎊", cls: "no-achievements" });
+      return;
+    }
+    
+    // Sắp xếp theo năm và ngày
+    const sortedAchievements = [...achievements].sort((a, b) => new Date(b.achievedDate) - new Date(a.achievedDate));
+    
+    sortedAchievements.forEach(achievement => {
+      const achievementEl = container.createDiv({ cls: "achievement-item" });
+      
+      const headerEl = achievementEl.createDiv({ cls: "achievement-item-header" });
+      headerEl.createEl("h3", { text: `🎉 ${achievement.date}/${achievement.year}`, cls: "achievement-level" });
+      headerEl.createEl("span", { text: new Date(achievement.achievedDate).toLocaleDateString('vi-VN'), cls: "achievement-date" });
+      
+      if (achievement.imagePath && achievement.imagePath.trim()) {
+        const imgContainer = achievementEl.createDiv({ cls: "achievement-image-container" });
+        const img = imgContainer.createEl("img", { cls: "achievement-image" });
+        img.src = this.plugin.resolveImagePath(achievement.imagePath);
+        img.style.maxWidth = "200px";
+        img.style.maxHeight = "150px";
+        img.style.borderRadius = "8px";
+        img.onerror = () => { img.style.display = 'none'; };
+      }
+      
+      achievementEl.createEl("p", { text: achievement.message, cls: "achievement-message" });
+    });
+  }
+  
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
   }
 }
 
@@ -362,7 +552,8 @@ class DebugEditModal extends import_obsidian.Modal {
         this.message = value;
       });
     });
-    new import_obsidian.Setting(contentEl).setName("Đường dẫn hình ảnh").setDesc("Đường dẫn đến file hình ảnh (tùy chọn)").addText((text) => text.setPlaceholder("https://example.com/image.jpg hoặc local/path/image.png").setValue(this.imagePath).onChange((value) => {
+    // Mới: Cập nhật mô tả cho đường dẫn hình ảnh
+    new import_obsidian.Setting(contentEl).setName("Đường dẫn hình ảnh").setDesc("URL (https://...) hoặc đường dẫn local trong vault (assets/image.png)").addText((text) => text.setPlaceholder("https://example.com/image.png hoặc assets/image.png").setValue(this.imagePath).onChange((value) => {
       this.imagePath = value;
     }));
     new import_obsidian.Setting(contentEl).setName("Test Preview").setDesc("Xem trước thông báo với nội dung hiện tại").addButton((btn) => btn.setButtonText("🔍 Preview").onClick(() => {
@@ -431,7 +622,7 @@ class WelcomeModal extends import_obsidian.Modal {
                     <li>⭐ <strong>Kiếm XP:</strong> Mỗi hoạt động ghi chú đều được thưởng</li>
                     <li>🎁 <strong>Review Bonus:</strong> Điểm thưởng cao khi xem lại ghi chú cũ</li>
                     <li>🎊 <strong>Ngày Đặc Biệt:</strong> Thông báo tự động cho các ngày quan trọng</li>
-                    <li>🏅 <strong>Thành Tựu:</strong> Thông báo đặc biệt cho level milestone</li>
+                    <li>🏅 <strong>Achievement Hub:</strong> Xem tất cả thành tựu đã đạt được</li>
                 </ul>
                 
                 <div class="xp-guide">
@@ -445,7 +636,8 @@ class WelcomeModal extends import_obsidian.Modal {
                 </div>
                 
                 <p class="welcome-footer">
-                    <strong>Bắt đầu viết để kiếm XP đầu tiên! 🚀</strong>
+                    <strong>Bắt đầu viết để kiếm XP đầu tiên! 🚀</strong><br>
+                    <em>Sử dụng ribbon icon 🏆 để xem Achievement Hub!</em>
                 </p>
             </div>
         `;
@@ -475,13 +667,16 @@ class LevelUpModal extends import_obsidian.Modal {
     if (this.imagePath && this.imagePath.trim()) {
       const imgContainer = contentEl.createEl("div", { cls: "level-image-container" });
       const img = imgContainer.createEl("img", { cls: "level-image" });
-      img.src = this.imagePath;
+      // Mới: Sử dụng resolveImagePath
+      const resolvedPath = this.app.plugins.plugins['obsidian-reward-hub']?.resolveImagePath(this.imagePath) || this.imagePath;
+      img.src = resolvedPath;
       img.style.maxWidth = "300px";
       img.style.maxHeight = "300px";
       img.style.display = "block";
       img.style.margin = "20px auto";
       img.style.borderRadius = "10px";
       img.style.boxShadow = "0 4px 15px rgba(0,0,0,0.3)";
+      img.onerror = () => { img.style.display = 'none'; };
     }
     const messageEl = contentEl.createEl("p", { text: this.message, cls: "level-message" });
     messageEl.style.fontSize = "1.2em";
@@ -513,13 +708,16 @@ class SpecialDateModal extends import_obsidian.Modal {
     if (this.imagePath && this.imagePath.trim()) {
       const imgContainer = contentEl.createEl("div", { cls: "special-image-container" });
       const img = imgContainer.createEl("img", { cls: "special-image" });
-      img.src = this.imagePath;
+      // Mới: Sử dụng resolveImagePath
+      const resolvedPath = this.app.plugins.plugins['obsidian-reward-hub']?.resolveImagePath(this.imagePath) || this.imagePath;
+      img.src = resolvedPath;
       img.style.maxWidth = "300px";
       img.style.maxHeight = "300px";
       img.style.display = "block";
       img.style.margin = "20px auto";
       img.style.borderRadius = "10px";
       img.style.boxShadow = "0 4px 15px rgba(0,0,0,0.3)";
+      img.onerror = () => { img.style.display = 'none'; };
     }
     const messageEl = contentEl.createEl("p", { text: this.message, cls: "special-message" });
     messageEl.style.fontSize = "1.2em";
@@ -588,6 +786,7 @@ class RewardInfoModal extends import_obsidian.Modal {
                 <li>🔄 Review/sửa ghi chú cũ: <strong>+${Math.floor(5 * this.plugin.settings.reviewXPMultiplier)} XP</strong></li>
             </ul>
             <p class="tip-highlight">💎 <strong>Mẹo:</strong> Thường xuyên xem lại và cập nhật ghi chú cũ để kiếm nhiều XP hơn!</p>
+            <p class="tip-highlight">🏆 <strong>Achievement:</strong> Sử dụng ribbon icon để xem tất cả thành tựu đã đạt được!</p>
         `;
     const button = contentEl.createEl("button", { text: "Đóng", cls: "mod-cta" });
     button.addEventListener("click", () => this.close());
@@ -646,24 +845,38 @@ class RewardHubSettingTab extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("🎮 Trạng Thái Reward Hub").setDesc(`Level: ${currentLevel} | Total XP: ${currentXP} | Tiến độ: ${progressPercent}%`).addButton((btn) => btn.setButtonText("🔄 Reset Progress").setWarning().onClick(async () => {
       this.plugin.settings.currentXP = 0;
       this.plugin.settings.currentLevel = 1;
+      // Mới: Reset achievement history
+      this.plugin.settings.achievementHistory = { levels: [], specialDates: [] };
       await this.plugin.saveSettings();
-      new import_obsidian.Notice("Đã reset tiến độ Reward Hub!");
+      new import_obsidian.Notice("Đã reset tiến độ và achievements Reward Hub!");
       this.display();
     })).addButton((btn) => btn.setButtonText("📊 Xem Chi Tiết").onClick(() => {
       new RewardInfoModal(this.app, this.plugin).open();
+    })).addButton((btn) => btn.setButtonText("🏆 Achievement Hub").setCta().onClick(() => {
+      new AchievementModal(this.app, this.plugin).open();
     }));
+    
     new import_obsidian.Setting(containerEl).setName("🔔 Hiển thị thông báo level up").setDesc("Hiển thị thông báo đặc biệt khi đạt level tròn chục (10, 20, 100, ...)").addToggle((toggle) => toggle.setValue(this.plugin.settings.showNotifications).onChange(async (value) => {
       this.plugin.settings.showNotifications = value;
       await this.plugin.saveSettings();
     }));
+    
+    // Mới: Cài đặt thông báo XP khi viết
+    new import_obsidian.Setting(containerEl).setName("📝 Thông báo XP khi viết").setDesc("Hiển thị thông báo +XP mỗi khi viết (tắt để giảm nhiễu, chỉ thông báo level up)").addToggle((toggle) => toggle.setValue(this.plugin.settings.showWritingNotifications).onChange(async (value) => {
+      this.plugin.settings.showWritingNotifications = value;
+      await this.plugin.saveSettings();
+    }));
+    
     new import_obsidian.Setting(containerEl).setName("📈 Hệ số XP Review").setDesc("Hệ số nhân cho XP khi xem/sửa ghi chú cũ (khuyến khích review)").addSlider((slider) => slider.setLimits(1, 5, 0.5).setValue(this.plugin.settings.reviewXPMultiplier).setDynamicTooltip().onChange(async (value) => {
       this.plugin.settings.reviewXPMultiplier = value;
       await this.plugin.saveSettings();
     }));
+    
     containerEl.createEl("h3", { text: "🔧 Debug/Test Tools" });
     new import_obsidian.Setting(containerEl).setName("🧪 Debug Notifications").setDesc("Công cụ test và debug thông báo").addButton((btn) => btn.setButtonText("🛠️ Open Debug Tools").onClick(() => {
       new DebugNotificationModal(this.app, this.plugin).open();
     }));
+    
     containerEl.createEl("h3", { text: "🎨 Tùy Chỉnh Level Messages & Hình Ảnh" });
     const levelContainer = containerEl.createDiv();
     this.displayCustomLevels(levelContainer);
@@ -672,6 +885,7 @@ class RewardHubSettingTab extends import_obsidian.PluginSettingTab {
         this.display();
       }).open();
     }));
+    
     containerEl.createEl("h3", { text: "📅 Ngày Đặc Biệt" });
     const datesContainer = containerEl.createDiv();
     this.displaySpecialDates(datesContainer);
@@ -680,13 +894,15 @@ class RewardHubSettingTab extends import_obsidian.PluginSettingTab {
         this.display();
       }).open();
     }));
+    
     containerEl.createEl("hr");
     const infoDiv = containerEl.createDiv({ cls: "reward-hub-info" });
     infoDiv.innerHTML = `
             <h4>📋 Thông Tin Plugin</h4>
-            <p><strong>Plugin:</strong> Obsidian Reward Hub v1.0.0</p>
+            <p><strong>Plugin:</strong> Obsidian Reward Hub v1.1.0</p>
             <p><strong>Tác giả:</strong> sonct</p>
-            <p><strong>Mô tả:</strong> Hệ thống gamification cho Obsidian với XP, levels và thông báo ngày đặc biệt</p>
+            <p><strong>Mô tả:</strong> Hệ thống gamification cho Obsidian với XP, levels, Achievement Hub và thông báo ngày đặc biệt</p>
+            <p><strong>Tính năng mới:</strong> Achievement Hub, hỗ trợ ảnh local, tắt thông báo XP</p>
         `;
   }
   displayCustomLevels(container) {
@@ -718,7 +934,7 @@ class RewardHubSettingTab extends import_obsidian.PluginSettingTab {
       return;
     }
     this.plugin.settings.specialDates.forEach((specialDate, index) => {
-      const setting = new import_obsidian.Setting(container).setName(`📅 ${specialDate.date}`).setDesc(specialDate.message.substring(0, 50) + (specialDate.message.length > 50 ? "..." : "")).addToggle((toggle) => toggle.setValue(specialDate.enabled).setTooltip("Bật/tắt").onChange(async (value) => {
+      const setting = new import_obsidian.Setting(container).setName(`📅 ${specialDate.date}`).setDesc(specialDate.message.substring(0, 50) + (specialDate.message.length > 50 ? "..." : "")).addToggle((toggle) => toggle.setValue(specialDate.enabled).onChange(async (value) => {
         this.plugin.settings.specialDates[index].enabled = value;
         await this.plugin.saveSettings();
       })).addButton((btn) => btn.setButtonText("✏️").setTooltip("Sửa").onClick(() => {
@@ -764,7 +980,8 @@ class CustomLevelModal extends import_obsidian.Modal {
         this.message = value;
       });
     });
-    new import_obsidian.Setting(contentEl).setName("Đường dẫn hình ảnh").setDesc("Đường dẫn đến file hình ảnh (tùy chọn)").addText((text) => text.setPlaceholder("https://example.com/image.jpg hoặc local/path/image.png").setValue(this.imagePath).onChange((value) => {
+    // Mới: Cập nhật mô tả cho đường dẫn hình ảnh
+    new import_obsidian.Setting(contentEl).setName("Đường dẫn hình ảnh").setDesc("URL (https://...) hoặc đường dẫn local trong vault (assets/image.png)").addText((text) => text.setPlaceholder("https://example.com/image.png hoặc assets/image.png").setValue(this.imagePath).onChange((value) => {
       this.imagePath = value;
     }));
     const buttonContainer = contentEl.createDiv({ cls: "modal-button-container" });
@@ -856,7 +1073,8 @@ class SpecialDateEditModal extends import_obsidian.Modal {
         this.message = value;
       });
     });
-    new import_obsidian.Setting(contentEl).setName("Đường dẫn hình ảnh").setDesc("Đường dẫn đến file hình ảnh (tùy chọn)").addText((text) => text.setPlaceholder("https://example.com/image.jpg").setValue(this.imagePath).onChange((value) => {
+    // Mới: Cập nhật mô tả cho đường dẫn hình ảnh
+    new import_obsidian.Setting(contentEl).setName("Đường dẫn hình ảnh").setDesc("URL (https://...) hoặc đường dẫn local trong vault (assets/image.png)").addText((text) => text.setPlaceholder("https://example.com/image.png hoặc assets/image.png").setValue(this.imagePath).onChange((value) => {
       this.imagePath = value;
     }));
     new import_obsidian.Setting(contentEl).setName("Kích hoạt").setDesc("Bật thông báo cho ngày này").addToggle((toggle) => toggle.setValue(this.enabled).onChange((value) => {
